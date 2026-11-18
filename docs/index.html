@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentBadge — Free badge for Agent ID holders</title>
+<style>
+  body { background:#0b0e11; color:#eaecef; font-family: system-ui, -apple-system, sans-serif; margin:0; padding:0; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { color:#f0b90b; font-size: 34px; margin: 0 0 8px; }
+  .sub { color:#848e9c; margin: 0 0 24px; }
+  .card { background:#1e2329; border:1px solid #2b3139; border-radius:12px; padding:20px; margin:16px 0; }
+  .row { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #2b3139; }
+  .row:last-child { border-bottom:none; }
+  .label { color:#848e9c; }
+  button { background:#f0b90b; color:#0b0e11; border:none; border-radius:8px; padding:12px 20px; font-size:16px; font-weight:700; cursor:pointer; width:100%; margin-top:8px; }
+  button:disabled { background:#474d57; color:#848e9c; cursor:not-allowed; }
+  button.secondary { background:#2b3139; color:#eaecef; }
+  input { width:100%; box-sizing:border-box; background:#0b0e11; color:#eaecef; border:1px solid #2b3139; border-radius:8px; padding:12px; font-size:15px; margin-top:8px; }
+  #status { white-space:pre-wrap; word-break:break-word; font-size:14px; color:#eaecef; }
+  a { color:#f0b90b; }
+  .fine { font-size:13px; color:#848e9c; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AgentBadge</h1>
+  <p class="sub">Free claim badge for Binance Agent ID holders. One per holder, gas only.
+  Built for the Binance Agent ID Hackathon.</p>
+
+  <div class="card">
+    <div class="row"><span class="label">Contract (BSC)</span><span id="contract">—</span></div>
+    <div class="row"><span class="label">Claimed</span><span id="claimed">—</span></div>
+    <div class="row"><span class="label">Max supply</span><span>10,000</span></div>
+    <div class="row"><span class="label">Your wallet</span><span id="account">not connected</span></div>
+    <div class="row"><span class="label">Agent ID</span><span id="agentid">—</span></div>
+    <div class="row"><span class="label">Already claimed</span><span id="hasclaimed">—</span></div>
+  </div>
+
+  <div class="card">
+    <button id="connectBtn">Connect wallet</button>
+    <input id="tagline" maxlength="140" placeholder="Optional one-line agent tagline (max 140 chars)">
+    <button id="claimBtn" disabled>Claim free badge</button>
+    <p id="status"></p>
+  </div>
+
+  <p class="fine">How it works: connect your wallet (MetaMask / Binance Wallet extension) on BNB
+  Smart Chain. The contract checks on-chain that your address holds an Agent ID, then mints
+  one badge. You confirm the transaction yourself in your wallet — this page never asks for
+  a QR login, a pairing code, a seed phrase, or any approval. The claim itself is free;
+  you only pay BNB network gas. Contract source is public on
+  <a id="repoLink" href="https://github.com/acilpiw/agentbadge" target="_blank" rel="noopener">GitHub</a>
+  and verified on <a id="bscLink" href="#" target="_blank" rel="noopener">BscScan</a>.</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
+<script>
+// ---- CONFIG: fill in the deployed contract address after deploy ----
+const CONFIG = {
+  contractAddress: "0x0000000000000000000000000000000000000000", // TODO: deployed AgentBadge
+  chainId: 56,
+};
+const AGENT_ID = "0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F";
+const ABI = [
+  "function claim(string tagline) external",
+  "function totalClaimed() view returns (uint256)",
+  "function hasClaimed(address) view returns (bool)",
+  "function balanceOf(address) view returns (uint256)",
+  "function ownerOf(uint256) view returns (address)",
+];
+const AGENT_ID_ABI = ["function balanceOf(address) view returns (uint256)"];
+
+let provider, signer, account, contract;
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (t) => { $("status").textContent = t; };
+const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "—";
+
+async function refresh() {
+  if (!provider) return;
+  try {
+    const c = new ethers.Contract(CONFIG.contractAddress, ABI, provider);
+    const claimed = await c.totalClaimed();
+    $("claimed").textContent = claimed.toString() + " / 10,000";
+    if (account) {
+      const agent = new ethers.Contract(AGENT_ID, AGENT_ID_ABI, provider);
+      const holds = await agent.balanceOf(account);
+      $("agentid").textContent = holds > 0n ? "yes — holder" : "no Agent ID";
+      const done = await c.hasClaimed(account);
+      $("hasclaimed").textContent = done ? "yes" : "no";
+      $("claimBtn").disabled = !(holds > 0n && !done);
+      if (done) setStatus("You already claimed your badge.");
+      else if (holds === 0n) setStatus("This wallet holds no Agent ID, so it cannot claim.");
+    }
+  } catch (e) { setStatus("Read failed: " + (e.shortMessage || e.message)); }
+}
+
+$("connectBtn").onclick = async () => {
+  if (!window.ethereum) { setStatus("No injected wallet found. Install MetaMask or Binance Wallet extension."); return; }
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    const net = await provider.getNetwork();
+    if (Number(net.chainId) !== CONFIG.chainId) {
+      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
+      provider = new ethers.BrowserProvider(window.ethereum);
+    }
+    const accounts = await provider.send("eth_requestAccounts", []);
+    account = accounts[0];
+    signer = await provider.getSigner();
+    contract = new ethers.Contract(CONFIG.contractAddress, ABI, signer);
+    $("account").textContent = short(account);
+    $("connectBtn").textContent = "Connected";
+    setStatus("Connected as " + account);
+    await refresh();
+  } catch (e) { setStatus("Connect failed: " + (e.shortMessage || e.message)); }
+};
+
+$("claimBtn").onclick = async () => {
+  if (!contract) return;
+  const tagline = $("tagline").value.trim();
+  try {
+    setStatus("Sending claim — confirm in your wallet…");
+    const tx = await contract.claim(tagline);
+    setStatus("Submitted: " + tx.hash + " — waiting for confirmation…");
+    const receipt = await tx.wait();
+    setStatus("Claimed! Tx " + receipt.hash + " (block " + receipt.blockNumber + ")");
+    await refresh();
+  } catch (e) { setStatus("Claim failed: " + (e.shortMessage || e.message)); }
+};
+
+$("contract").textContent = short(CONFIG.contractAddress);
+$("bscLink").href = "https://bscscan.com/address/" + CONFIG.contractAddress;
+refresh();
+</script>
+</body>
+</html>
