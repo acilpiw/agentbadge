@@ -8,6 +8,7 @@
   body { background:#0b0e11; color:#eaecef; font-family: system-ui, -apple-system, sans-serif; margin:0; padding:0; }
   .wrap { max-width: 640px; margin: 0 auto; padding: 32px 20px 64px; }
   h1 { color:#f0b90b; font-size: 34px; margin: 0 0 8px; }
+  h2 { color:#eaecef; font-size: 20px; margin: 0 0 8px; }
   .sub { color:#848e9c; margin: 0 0 24px; }
   .card { background:#1e2329; border:1px solid #2b3139; border-radius:12px; padding:20px; margin:16px 0; }
   .row { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #2b3139; }
@@ -17,9 +18,16 @@
   button:disabled { background:#474d57; color:#848e9c; cursor:not-allowed; }
   button.secondary { background:#2b3139; color:#eaecef; }
   input { width:100%; box-sizing:border-box; background:#0b0e11; color:#eaecef; border:1px solid #2b3139; border-radius:8px; padding:12px; font-size:15px; margin-top:8px; }
-  #status { white-space:pre-wrap; word-break:break-word; font-size:14px; color:#eaecef; }
+  #status, #checkStatus { white-space:pre-wrap; word-break:break-word; font-size:14px; color:#eaecef; }
   a { color:#f0b90b; }
   .fine { font-size:13px; color:#848e9c; }
+  .bar { background:#0b0e11; border:1px solid #2b3139; border-radius:8px; height:14px; overflow:hidden; margin-top:10px; }
+  .bar > div { background:#f0b90b; height:100%; width:0%; transition:width .6s; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; margin-top:12px; }
+  .badge { background:#0b0e11; border:1px solid #2b3139; border-radius:10px; padding:10px; }
+  .badge img { width:100%; border-radius:6px; display:block; }
+  .badge .meta { font-size:12px; color:#848e9c; margin-top:8px; word-break:break-all; }
+  .badge .tag { font-size:13px; color:#eaecef; margin-top:4px; }
 </style>
 </head>
 <body>
@@ -35,6 +43,8 @@
     <div class="row"><span class="label">Your wallet</span><span id="account">not connected</span></div>
     <div class="row"><span class="label">Agent ID</span><span id="agentid">—</span></div>
     <div class="row"><span class="label">Already claimed</span><span id="hasclaimed">—</span></div>
+    <div class="bar"><div id="milestoneBar"></div></div>
+    <p class="fine" id="milestoneText">Hackathon milestone: 30 Agent ID holders (Innovation Award minimum) — loading…</p>
   </div>
 
   <div class="card">
@@ -42,6 +52,20 @@
     <input id="tagline" maxlength="140" placeholder="Optional one-line agent tagline (max 140 chars)">
     <button id="claimBtn" disabled>Claim free badge</button>
     <p id="status"></p>
+  </div>
+
+  <div class="card">
+    <h2>Check any address</h2>
+    <p class="fine">See whether an address holds an Agent ID and whether it can still claim a badge. Read-only, no wallet needed.</p>
+    <input id="checkAddr" placeholder="0x… address to check">
+    <button id="checkBtn" class="secondary">Check address</button>
+    <p id="checkStatus"></p>
+  </div>
+
+  <div class="card">
+    <h2>Latest badges</h2>
+    <p class="fine">Most recent claims, read straight from the contract. Badge artwork and metadata live fully on-chain.</p>
+    <div class="grid" id="gallery"><p class="fine">Loading…</p></div>
   </div>
 
   <p class="fine">How it works: connect your wallet (MetaMask / Binance Wallet extension) on BNB
@@ -55,10 +79,10 @@
 
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
 <script>
-// ---- CONFIG: fill in the deployed contract address after deploy ----
 const CONFIG = {
   contractAddress: "0xEa3eA0f0ef49ec86D39aafd0e7cA01127dca1b7e",
   chainId: 56,
+  readRpc: "https://bsc-dataseed.binance.org",
 };
 const AGENT_ID = "0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F";
 const ABI = [
@@ -67,32 +91,73 @@ const ABI = [
   "function hasClaimed(address) view returns (bool)",
   "function balanceOf(address) view returns (uint256)",
   "function ownerOf(uint256) view returns (address)",
+  "function tokenURI(uint256) view returns (string)",
+  "function taglineOf(uint256) view returns (string)",
 ];
 const AGENT_ID_ABI = ["function balanceOf(address) view returns (uint256)"];
 
 let provider, signer, account, contract;
+const readProvider = new ethers.JsonRpcProvider(CONFIG.readRpc);
 
 const $ = (id) => document.getElementById(id);
 const setStatus = (t) => { $("status").textContent = t; };
 const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "—";
+const readContract = () => new ethers.Contract(CONFIG.contractAddress, ABI, readProvider);
+const readAgent = () => new ethers.Contract(AGENT_ID, AGENT_ID_ABI, readProvider);
 
-async function refresh() {
-  if (!provider) return;
+async function refreshStats() {
+  try {
+    const c = readContract();
+    const claimed = Number(await c.totalClaimed());
+    $("claimed").textContent = claimed.toString() + " / 10,000";
+    const pct = Math.min(100, Math.round(claimed / 30 * 100));
+    $("milestoneBar").style.width = pct + "%";
+    $("milestoneText").textContent = claimed >= 30
+      ? "Hackathon milestone reached: " + claimed + " Agent ID holders have claimed — past the 30-holder Innovation Award minimum."
+      : "Hackathon milestone: " + claimed + " / 30 Agent ID holders (Innovation Award minimum).";
+    return claimed;
+  } catch (e) { $("claimed").textContent = "read failed"; return 0; }
+}
+
+async function refreshWallet() {
+  if (!provider || !account) return;
   try {
     const c = new ethers.Contract(CONFIG.contractAddress, ABI, provider);
-    const claimed = await c.totalClaimed();
-    $("claimed").textContent = claimed.toString() + " / 10,000";
-    if (account) {
-      const agent = new ethers.Contract(AGENT_ID, AGENT_ID_ABI, provider);
-      const holds = await agent.balanceOf(account);
-      $("agentid").textContent = holds > 0n ? "yes — holder" : "no Agent ID";
-      const done = await c.hasClaimed(account);
-      $("hasclaimed").textContent = done ? "yes" : "no";
-      $("claimBtn").disabled = !(holds > 0n && !done);
-      if (done) setStatus("You already claimed your badge.");
-      else if (holds === 0n) setStatus("This wallet holds no Agent ID, so it cannot claim.");
-    }
+    const agent = new ethers.Contract(AGENT_ID, AGENT_ID_ABI, provider);
+    const holds = await agent.balanceOf(account);
+    $("agentid").textContent = holds > 0n ? "yes — holder" : "no Agent ID";
+    const done = await c.hasClaimed(account);
+    $("hasclaimed").textContent = done ? "yes" : "no";
+    $("claimBtn").disabled = !(holds > 0n && !done);
+    if (done) setStatus("You already claimed your badge.");
+    else if (holds === 0n) setStatus("This wallet holds no Agent ID, so it cannot claim.");
   } catch (e) { setStatus("Read failed: " + (e.shortMessage || e.message)); }
+}
+
+async function loadGallery(total) {
+  const box = $("gallery");
+  if (!total) { box.innerHTML = '<p class="fine">No claims yet.</p>'; return; }
+  try {
+    const c = readContract();
+    const ids = [];
+    for (let id = total; id >= Math.max(1, total - 11); id--) ids.push(id);
+    const items = await Promise.all(ids.map(async (id) => {
+      const [owner, uri, tag] = await Promise.all([c.ownerOf(id), c.tokenURI(id), c.taglineOf(id)]);
+      let img = "";
+      try {
+        const json = JSON.parse(atob(uri.split(",")[1]));
+        img = json.image || "";
+      } catch (e) { /* keep empty */ }
+      return { id, owner, img, tag };
+    }));
+    box.innerHTML = items.map((it) =>
+      '<div class="badge">' +
+      (it.img ? '<img alt="AgentBadge #' + it.id + '" src="' + it.img + '">' : "") +
+      '<div class="meta">#' + it.id + " · owner " + short(it.owner) + "</div>" +
+      (it.tag ? '<div class="tag">“' + it.tag.replace(/</g, "&lt;") + "”</div>" : "") +
+      "</div>"
+    ).join("");
+  } catch (e) { box.innerHTML = '<p class="fine">Gallery failed to load.</p>'; }
 }
 
 $("connectBtn").onclick = async () => {
@@ -111,7 +176,7 @@ $("connectBtn").onclick = async () => {
     $("account").textContent = short(account);
     $("connectBtn").textContent = "Connected";
     setStatus("Connected as " + account);
-    await refresh();
+    await refreshWallet();
   } catch (e) { setStatus("Connect failed: " + (e.shortMessage || e.message)); }
 };
 
@@ -124,13 +189,30 @@ $("claimBtn").onclick = async () => {
     setStatus("Submitted: " + tx.hash + " — waiting for confirmation…");
     const receipt = await tx.wait();
     setStatus("Claimed! Tx " + receipt.hash + " (block " + receipt.blockNumber + ")");
-    await refresh();
+    const total = await refreshStats();
+    await loadGallery(total);
+    await refreshWallet();
   } catch (e) { setStatus("Claim failed: " + (e.shortMessage || e.message)); }
+};
+
+$("checkBtn").onclick = async () => {
+  const addr = $("checkAddr").value.trim();
+  const out = $("checkStatus");
+  if (!ethers.isAddress(addr)) { out.textContent = "That does not look like a valid address."; return; }
+  out.textContent = "Checking…";
+  try {
+    const holds = await readAgent().balanceOf(addr);
+    const done = await readContract().hasClaimed(addr);
+    out.textContent =
+      "Agent ID: " + (holds > 0n ? "yes — holder" : "no") + "\n" +
+      "Badge claimed: " + (done ? "yes" : "no") + "\n" +
+      (done ? "This address already has its badge." : holds > 0n ? "This address can still claim its free badge." : "This address needs an Agent ID before it can claim.");
+  } catch (e) { out.textContent = "Check failed: " + (e.shortMessage || e.message); }
 };
 
 $("contract").textContent = short(CONFIG.contractAddress);
 $("bscLink").href = "https://bscscan.com/address/" + CONFIG.contractAddress;
-refresh();
+(async () => { const total = await refreshStats(); await loadGallery(total); })();
 </script>
 </body>
 </html>

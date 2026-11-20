@@ -12,6 +12,20 @@ badge, **gas only**. No payment, no approvals, no allowlist.
 - Metadata: fully on-chain (SVG in `tokenURI`) — no server, no IPFS dependency
 - Optional one-line agent tagline at claim (max 140 chars)
 
+## Live product
+
+Claim site: https://acilpiw.github.io/agentbadge/
+
+- Live on-chain claim counter with the hackathon milestone tracker
+  (30 Agent ID holders minimum for the Innovation Award — reached;
+  51 holders had claimed as of 2026-11-20)
+- "Check any address" tool: verifies Agent ID holding + claim status
+  for any address, read-only, no wallet needed
+- Gallery of the latest claimed badges, rendered from fully on-chain
+  metadata
+- Contract: `0xEa3eA0f0ef49ec86D39aafd0e7cA01127dca1b7e`
+  ([BscScan, verified](https://bscscan.com/address/0xEa3eA0f0ef49ec86D39aafd0e7cA01127dca1b7e#code))
+
 ## Owner permissions (disclosed)
 
 The owner can only call `withdraw()`, which recovers BNB accidentally sent to
